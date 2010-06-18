@@ -100,10 +100,10 @@ function ilsauthen_driver_connect($user_data) {
   $auth_method = variable_get('ilsauthen_evergreen_authen_method', 'XML-RPC');
   switch ($auth_method) {
     case 'XML-RPC':
-      $url = $evergreen_server .'/xml-rpc/open-ils.auth'; 
+      $url = $evergreen_server .'/xml-rpc/open-ils.auth';
       // First, get the seed
-      $method = 'open-ils.auth.authenticate.init'; 
-      $seed = xmlrpc($url, $method, $user_data['name']); 
+      $method = 'open-ils.auth.authenticate.init';
+      $seed = xmlrpc($url, $method, $user_data['name']);
       // Call general error handler if can't connect
       if ($error = xmlrpc_error()) {
         ilsauthen_remote_connection_error('evergreen', $evergreen_server, $error->code, $error->message);
@@ -115,7 +115,7 @@ function ilsauthen_driver_connect($user_data) {
       $login_params = array('password' => $md5_password, 'type' => 'opac', 'org' => NULL, 
         // 'username' => $user_data['name']);
         $identity => $user_data['name']);
-      $result = xmlrpc($url, $method, $login_params); 
+      $result = xmlrpc($url, $method, $login_params);
       // Call general error handler if can't connect
       if ($error = xmlrpc_error()) {
         ilsauthen_remote_connection_error('evergreen', $evergreen_server, $error->code, $error->message);
@@ -126,7 +126,7 @@ function ilsauthen_driver_connect($user_data) {
       }
       break;
     case 'JSON':
-      $url = $evergreen_server .'/gateway'; 
+      $url = $evergreen_server .'/gateway';
       // First, get the seed
       $post_data = 'method=open-ils.auth.authenticate.init&service=open-ils.auth&param="'. 
         $user_data['name'] .'"';
