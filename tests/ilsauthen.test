@@ -1,0 +1,57 @@
+<?php
+// $Id$
+
+/**
+ * Simpletest suite for ILS Authentication module. Intended to provide an example
+ * for driver developers. Requres installation of the Simpletest module
+ * (http://drupal.org/project/simpletest).
+ *
+ * To test a driver, 1) install the SimpleTest module, 2) initialize any variables 
+ * your driver uses in setUp() below by adding your own variable_set() statements; 
+ * 3) modify the $edit array in testSampleDriverLogin() below to contain valid user 
+ * credentials for the external source you are testing against; and 4) in your Drupal 
+ * admin interface, go to > > and run the ILS Authentication tests. 
+ */
+
+class IlsauthenFunctionalTest extends DrupalWebTestCase {
+ /**
+  * Implementation of getInfo().
+  */
+ function getInfo() {
+   return array(
+     'name' => t('ILS Authentication'),
+     'description' => t('Executes test suite for the ILS Authentication drivers.'),
+     'group' => t('ILS Authentication drivers'),
+   );
+ }
+
+ /**
+  * Implementation of setUp(). Enable the ilsauthen module, set any variables
+  * that your driver needs.
+  */
+ function setUp() {
+   // Make sure that ILS Authentication module is enabled. You should not edit
+   // this statement.
+   parent::setUp('ilsauthen');
+   // Identify the driver you are testing.
+   variable_set('ilsauthen_driver', 'evergreen');
+   // Some other variable like your authentication's hostname, etc.
+   variable_set('ilsauthen_evergreen_server_url', 'http://my.evergreenlibrary.ca');
+   variable_set('ilsauthen_evergreen_authen_method', 'XML-RPC');
+ }
+
+ /**
+  * Test function. Your test login credentials go in the $edit array, leave the 
+  * rest as is.
+  */
+ function testSampleDriverLogin() {
+   // Log in using sample driver test user credentials. Note: this login will not
+   // be recorded in your Drupal watchdog logs -- the only way you know the login
+   // was successful is to use Simpletest assertions, as illustrated below.
+   $edit = array('name' => 'eguser', 'pass' => 'egpass');
+   // Try to log in at /user
+   $this->drupalPost('user', $edit, t('Log in'));
+   // If login is successful, the URL to the Drupal logout path will appear in the page's HTML
+   $this->assertRaw('<a href="'. url('logout') .'">', t('Make sure a link appears to "Log out"'));
+ }
+}

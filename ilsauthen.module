@@ -1,0 +1,264 @@
+<?php
+// $Id$
+
+/*
+Author: Mark Jordan (mjordan@sfu.ca)
+Last modified: 2009-05-04
+License: GPL v2 and later
+
+To do: 
+-Figure out a way to allow local users to log in when there is a third, required field injected into login 
+ form by a driver (e.g., iii).
+-Add return profile_save_profile($edit, $user, $category, TRUE); to hook_user($op = 'insert') with full 
+ name, etc.? If so, we need config options for thisi, maybe in driver function (but then local admins would
+ need to modify drivers).
+-Add Koha driver: http://wiki.koha.org/doku.php?id=en:development:web_services#authentication. 
+ Update: Koha uses SIP2.
+*/
+
+/**
+ * Load the selected driver
+ */
+$driver = variable_get('ilsauthen_driver', 'sample');
+module_load_include('inc', 'ilsauthen', 'drivers/'. $driver);
+
+/**
+* Implementation of hook_menu().
+*/
+function ilsauthen_menu() {
+  $items['admin/settings/ilsauthen'] = array(
+    'title' => 'ILS Authentication settings',
+    'description' => 'Configure ILS authentication.',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('ilsauthen_admin_settings'),
+    'access arguments' => array('administer site configuration'),
+    'type' => MENU_NORMAL_ITEM,
+    'file' => 'ilsauthen.admin.inc',
+  );
+  $items['ilsauthen/savesetting/js'] = array(
+    'page callback' => 'ilsauthen_savesettings_js',
+    'access arguments' => array('administer site configuration'),
+    'type' => MENU_CALLBACK,
+  );
+  return $items;
+}
+
+/**
+ * Page callback to display ahah message
+ */
+function ilsauthen_savesettings_js() {
+  $output = t('<div class="messages error">You must now click on "Save configuration" below to make the correct driver settings appear.</div>'); 
+  drupal_json(array('status' => TRUE, 'data' => $output)); 
+}
+
+
+/**
+* Implementation of hook_form_alter(). We need to alter the login form so 
+* we can inject our own validation function.
+*/
+function ilsauthen_form_alter(&$form, $form_state, $form_id) {
+  if ($form_id == 'user_profile_form') {
+    // First, check to see if the account is an external one
+    global $user;
+    $ils_authen_authname = db_result(db_query("SELECT authname FROM {authmap} WHERE uid = %d AND module = '%s'", 
+      $user->uid, 'ilsauthen'));
+    // Then, remove the password fields from the account form, since we want to replace it with a 
+    // driver-specific message.
+    if ($ils_authen_authname) {
+      unset($form['account']['pass']);
+      // Finally, display the current driver's password reset message
+      $form['reset_password'] = array(
+        '#type' => 'fieldset',
+        '#title' => t('Reset your password'),
+        '#weight' => 5,
+        '#collapsible' => FALSE,
+        '#collapsed' => FALSE,
+      );
+      $reset_password_message = ilsauthen_get_reset_password_message();
+      $form['reset_password']['message'] = array(
+        '#type' => 'item', 
+        '#value' => $reset_password_message,
+      );
+    }
+  }
+
+  if ($form_id == 'user_login' || $form_id == 'user_login_block') {
+    // If the login form is being submitted, add our validation function.
+    if (isset($form_state['post']['name'])) {
+      // Find the core validation function's validation function so we can replace it
+      $array_key = array_search('user_login_authenticate_validate', $form['#validate']);
+      // Replace the core validation function with this module's 
+      $form['#validate'][$array_key] = 'ilsauthen_login_validate';
+    }
+  }
+
+  // Add custom submit function on the user password reset form to check if user is external,
+  // so user can be told to reset their password at the external source.
+  if ($form_id == 'user_pass') {
+    $form['#submit'][] = 'ilsauthen_check_reset_password_request'; // Gets passed $form and $form_state
+  }
+
+  // Allow current driver to inject its own form_alter() code here by passing &$form, $form_state, $form_id
+  ilsauthen_form_alter_driver($form, $form_state, $form_id);
+}
+
+/**
+* Login form validation function. Checks to see if user exists and routes to either this 
+* module's authentication function or Drupal's core authentication function.
+*/
+function ilsauthen_login_validate($form, &$form_state) {
+  $enable_logging = variable_get('ilsauthen_enable_logging', 0);
+
+  // First, allow drivers to perform their own login form validation
+  ilsauthen_driver_login_validation($form, $form_state);
+
+  // Then, query the {users} table to see if the account name exists
+  $uid = db_result(db_query("SELECT uid FROM {users} WHERE name = '%s'", $form_state['values']['name']));
+  if ($uid) {
+    // If the account exists, query the {authmap} table to see if authentication is handled by ilsauthen
+    $ils_authen_authname = db_result(db_query("SELECT authname FROM {authmap} WHERE uid = %d AND module = '%s'", 
+      $uid, 'ilsauthen'));
+    // If there is a matching account in the authmap table, pass form values off to ilsauthen_authenticate(); 
+    // if not, route them to Drupal's authentication
+    if ($ils_authen_authname) {
+      if ($enable_logging) {
+        watchdog('user', 'Account %name/%pass (uid %uid) exists and is handled by external authentication', 
+          array('%name' => $form_state['values']['name'], '%pass' => $form_state['values']['pass'], '%uid' => $uid));
+      }
+      ilsauthen_authenticate($form_state['values']); 
+    } 
+    else {
+      // watchdog('user', 'uid %uid exists and is not handled by ilsauthen', array('%uid' => $uid));
+      user_authenticate($form_state['values']);
+    }
+  } 
+  else {
+    // If the account doesn't already exist, pass form values off to ilsauthen_authenticate() 
+    // to create new account (will fail if ilsauthen_authenticate() returns FALSE)
+    if ($enable_logging) {
+      watchdog('user', 'Account %name/%pass not found, routing to external authentication driver', 
+        array('%name' => $form_state['values']['name'], '%pass' => $form_state['values']['pass']));
+    }
+    ilsauthen_authenticate($form_state['values']); 
+  }
+}
+
+/**
+ * Authenticate user against ILS plugin invoked by ilsauthen_query_driver()
+ */
+function ilsauthen_authenticate($form_values) {
+  $username = $form_values['name'];
+  // Hash the password and make it a global so we can use it in ilsauthen_user()
+  global $_hashed_pass; 
+  $_hashed_pass = md5($form_values['pass']);
+  // We pass $form_values to the driver so we don't need to worry about
+  // what each ILS uses to authenticate (could be combo of username, password, PIN, etc.)
+  $driver_response = ilsauthen_query_driver($form_values);
+  if ($driver_response) { 
+    // Define global variable to indicate that we have performed authentication
+    global $_ilsauthen_authenticated;
+    $_ilsauthen_authenticated = TRUE;
+    // Log user in, or register new user if not already registered
+    user_external_login_register($username, 'ilsauthen');
+    // Write session, update timestamp, run user login hook
+    user_authenticate_finalize($form_state['values']);
+    return TRUE;
+  } 
+  else {
+    return FALSE;
+  }
+}
+
+/**
+ * Implementation of hook_user()
+ */
+function ilsauthen_user($op, &$edit, &$account, $category = NULL) {
+  switch ($op) {
+    case 'insert':
+    // New user was just registered; if this module provided the authentication, get
+    // ILS-specific account attributes
+    global $_ilsauthen_authenticated;
+    $driver = variable_get('ilsauthen_driver', '');
+    module_load_include('inc', 'ilsauthen', 'drivers/'. $driver);
+    if ($_ilsauthen_authenticated) {
+      // Add email address to account, if provided by driver
+      $mail = ilsauthen_get_email_address();
+      if ($mail) {
+        // Set e-mail address in the users table for this user.
+        db_query("UPDATE {users} SET mail = '%s' WHERE uid = %d", $mail, $account->uid);
+      }
+      // Add roles to account, as selected in admin settings
+      $roles = variable_get('ilsauthen_default_roles', array());
+      foreach ($roles as $key => $value) {
+        if ($value) {
+          db_query("INSERT INTO {users_roles} (uid, rid) VALUES (%d, %d)", $account->uid, $key); 
+        }
+      }
+      // Update {users} with remote password, so that user can still log in as a regular Drupal
+      // user if/when this module is uninstalled. Question: where do we get the password?
+      global $_hashed_pass;
+      db_query("UPDATE {users} SET pass = '%s' WHERE uid = %d", $_hashed_pass, $account->uid);
+    } 
+    break;
+    case 'login':
+      // We want to display a message to users if they don't have an email address in thier profile.
+      if (variable_get('ilsauthen_show_no_mail_warning', 1)) {
+        $mail = db_result(db_query("SELECT mail from {users} WHERE uid = %d", $account->uid));
+        if (!$mail) {
+          // Show the message on every page except user/xx/edit, since it stays around even after they
+          // have updated their account because of when $op == 'load' is fired.
+            drupal_set_message(t('Please add your email address to !user.', 
+              array('!user' => l('your profile', "user/$account->uid/edit"))), 'warning', FALSE);
+        }
+      }
+    break;
+  }
+}
+
+/**
+ * Use ILS-specific authentication driver. Return TRUE if ILS authenticates user,
+ * FALSE if not. We pass in form values so we don't need to worry about what each ILS 
+ * uses to authenticate (could be combo of username, password, PIN, etc.), if extras are
+ * added via form_alter().
+ */
+function ilsauthen_query_driver($login_form_values) {
+  // Query driver
+  $driver = variable_get('ilsauthen_driver', '');
+  module_load_include('inc', 'ilsauthen', 'drivers/'. $driver);
+  return ilsauthen_driver_connect($login_form_values);
+}
+
+/**
+ * Retrieve the reset password message for the current driver.
+ */
+function ilsauthen_get_reset_password_message() {
+  $driver = variable_get('ilsauthen_driver', 'sample');
+  $reset_password_message_setting = 'ilsauthen_'. $driver .'_reset_password_message';
+  $reset_password_message = variable_get($reset_password_message_setting, 'ilsauthen_xxx_reset_password_message');
+  return $reset_password_message;
+}
+
+/**
+ * General error handler called when remote authentication source doesn't respond.
+ */
+function ilsauthen_remote_connection_error($driver = NULL, $server = NULL, $error_num = 'none', $error_message = 'none') {
+  $admin_email = variable_get('site_mail', '');
+  drupal_set_message(t('Error connecting to authentication source. The problem has been logged but you may want to report it to the site admin at !site_mail. Ignore the "unrecognized username or password" message below.',
+    array('!site_mail' => l($admin_email, "mailto:$admin_email"))), 'warning', FALSE, array('absolute' => TRUE, 'html' => TRUE));
+  watchdog('user', 'Driver %driver cannot connect to %server (error num: %error_num, error message: %error_message)', 
+    array('%driver' => $driver, '%server' => $server, '%error_num' => $error_num, '%error_message' => $error_message));
+}
+
+/**
+ * Custom submission function for user password request form. Checks to see if account is managed by
+ * this module and if so, displays the active driver's password reset message. Local accounts are
+ * not affected by this customm submission function.
+ */
+function ilsauthen_check_reset_password_request($form, $form_state) {
+  $uid = db_result(db_query("SELECT uid FROM {authmap} WHERE authname = '%s' AND module = '%s'", 
+    $form_state['values']['name'], 'ilsauthen'));
+  if ($uid) {
+    $message = ilsauthen_get_reset_password_message();
+    drupal_set_message($message); 
+  }
+}
