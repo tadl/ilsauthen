@@ -56,7 +56,7 @@ function ilsauthen_form_alter_driver(&$form, $form_state, $form_id) {
       '#type' => 'textarea',
       '#title' => t('Message sent to users when they reset their password'),
       '#default_value' => filter_xss_admin(variable_get($reset_password_message_element, "Please go to http://passwords.myexample.ca to change your password.\n\nThank you.")),
-      '#description' => t('You my include HTML markup.'),
+      '#description' => t('You may include HTML markup.'),
       '#required' => TRUE,
       '#weight' => -7,
     );
