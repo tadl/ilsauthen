@@ -255,7 +255,8 @@ function ilsauthen_remote_connection_error($driver = NULL, $server = NULL, $erro
  * not affected by this customm submission function.
  */
 function ilsauthen_check_reset_password_request($form, $form_state) {
-  $uid = db_result(db_query("SELECT uid FROM {authmap} WHERE authname = '%s' AND module = '%s'", 
+  // TODO: shouldn't assume authname == username here, look up based on username and join on uid?
+  $uid = db_result(db_query("SELECT uid FROM {authmap} WHERE authname = '%s' AND module = '%s'",
     $form_state['values']['name'], 'ilsauthen'));
   if ($uid) {
     $message = ilsauthen_get_reset_password_message();
