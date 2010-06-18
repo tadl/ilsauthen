@@ -96,71 +96,92 @@ function ilsauthen_driver_connect($user_data) {
     $identity = 'username';
   }
   $ret_value = FALSE;
-  $evergreen_server = variable_get('ilsauthen_evergreen_server_url', 'http://my.evergreen.lib.ca');
   $auth_method = variable_get('ilsauthen_evergreen_authen_method', 'XML-RPC');
   switch ($auth_method) {
     case 'XML-RPC':
-      $url = $evergreen_server .'/xml-rpc/open-ils.auth';
-      // First, get the seed
-      $method = 'open-ils.auth.authenticate.init';
-      $seed = xmlrpc($url, $method, $user_data['name']);
-      // Call general error handler if can't connect
-      if ($error = xmlrpc_error()) {
-        ilsauthen_remote_connection_error('evergreen', $evergreen_server, $error->code, $error->message);
-        return FALSE;
-      }
-      // Then, log in
-      $md5_password = md5($seed . md5($user_data['pass']));
-      $method = 'open-ils.auth.authenticate.complete';
-      $login_params = array('password' => $md5_password, 'type' => 'opac', 'org' => NULL, 
-        // 'username' => $user_data['name']);
-        $identity => $user_data['name']);
-      $result = xmlrpc($url, $method, $login_params);
-      // Call general error handler if can't connect
-      if ($error = xmlrpc_error()) {
-        ilsauthen_remote_connection_error('evergreen', $evergreen_server, $error->code, $error->message);
-        return FALSE;
-      }
-      if ($result['textcode'] == 'SUCCESS') {
-        $ret_value = TRUE;
-      }
+    // recommended for Evergreen 1.2 and below
+    // first available in Evergreen 1.0
+      $ret_value = _evergreen_connect_xmlrpc($user_data['name'], $user_data['pass'], $identity);
       break;
     case 'JSON':
-      $url = $evergreen_server .'/gateway';
-      // First, get the seed
-      $post_data = 'method=open-ils.auth.authenticate.init&service=open-ils.auth&param="'. 
-        $user_data['name'] .'"';
-      $curl = curl_init($url);
-      curl_setopt($curl, CURLOPT_POST, TRUE);
-      curl_setopt($curl, CURLOPT_RETURNTRANSFER, 1);
-      curl_setopt($curl, CURLOPT_POSTFIELDS, $post_data);
-      $seed = curl_exec($curl);
-      // Call general error handler if can't connect
-      if (curl_errno($curl)) {
-        ilsauthen_remote_connection_error('evergreen', $evergreen_server, curl_errno($curl), curl_error($curl));
-        return FALSE;
-      }
-      $seed = json_decode($seed);
-      // Then, log in
-      $md5_password = md5($seed->payload[0] . md5($user_data['pass']));
-      $login_params = json_encode(array('password' => $md5_password,  'type' => 'opac', 
-        // 'org' => NULL, 'username' => $user_data['name']));
-        'org' => NULL, $identity => $user_data['name']));
-      $post_data = 'method=open-ils.auth.authenticate.complete&service=open-ils.auth&param='. 
-        $login_params;
-      curl_setopt($curl, CURLOPT_POSTFIELDS, $post_data);
-      $result = curl_exec($curl);
-      // Call general error handler if can't connect
-      if (curl_errno($curl)) {
-        ilsauthen_remote_connection_error('evergreen', $evergreen_server, curl_errno($curl), curl_error($curl));
-        return FALSE;
-      }
-      curl_close($curl);
-      $result = json_decode($result);
-      if ($result->payload[0]->textcode == 'SUCCESS') {
-        $ret_value = TRUE;
-      }
+    // recommended for Evergreen 1.4 and above
+    // first available in Evergreen 1.4
+      $ret_value = _evergreen_connect_json($user_data['name'], $user_data['pass'], $identity);
       break;
   }
+
+  if ($ret_value != TRUE) {
+    $ret_value = FALSE;
+  }
+
   return $ret_value;
 }
+
+function _evergreen_connect_json($name, $pass, $identity) {
+    $ret_value = FALSE;
+    $evergreen_server = variable_get('ilsauthen_evergreen_server_url', 'http://my.evergreen.lib.ca');
+    $url = $evergreen_server .'/osrf-gateway-v1';
+    // First, get the seed
+    $post_data = 'method=open-ils.auth.authenticate.init&service=open-ils.auth&param="'. 
+      $name .'"';
+    $curl = curl_init($url);
+    curl_setopt($curl, CURLOPT_POST, TRUE);
+    curl_setopt($curl, CURLOPT_RETURNTRANSFER, 1);
+    curl_setopt($curl, CURLOPT_POSTFIELDS, $post_data);
+    $seed = curl_exec($curl);
+    // Call general error handler if can't connect
+    if (curl_errno($curl)) {
+      ilsauthen_remote_connection_error('evergreen', $evergreen_server, curl_errno($curl), curl_error($curl));
+      return FALSE;
+    }
+    $seed = json_decode($seed);
+    // Then, log in
+    $md5_password = md5($seed->payload[0] . md5($pass));
+    $login_params = json_encode(array('password' => $md5_password,  'type' => 'opac', 
+      'org' => NULL, $identity => $name));
+    $post_data = 'method=open-ils.auth.authenticate.complete&service=open-ils.auth&param='. 
+      $login_params;
+    curl_setopt($curl, CURLOPT_POSTFIELDS, $post_data);
+    $result = curl_exec($curl);
+    // Call general error handler if can't connect
+    if (curl_errno($curl)) {
+      ilsauthen_remote_connection_error('evergreen', $evergreen_server, curl_errno($curl), curl_error($curl));
+      return FALSE;
+    }
+    curl_close($curl);
+    $result = json_decode($result);
+    if ($result->payload[0]->textcode == 'SUCCESS') {
+      $ret_value = TRUE;
+    }
+    return $ret_value;
+}
+
+function _evergreen_connect_xmlrpc($name, $pass, $identity) {
+    $ret_value = FALSE;
+    $evergreen_server = variable_get('ilsauthen_evergreen_server_url', 'http://my.evergreen.lib.ca');
+    $url = $evergreen_server .'/xml-rpc/open-ils.auth';
+    // First, get the seed
+    $method = 'open-ils.auth.authenticate.init';
+    $seed = xmlrpc($url, $method, $name);
+    // Call general error handler if can't connect
+    if ($error = xmlrpc_error()) {
+        ilsauthen_remote_connection_error('evergreen', $evergreen_server, $error->code, $error->message);
+        return FALSE;
+    }
+    // Then, log in
+    $md5_password = md5($seed . md5($pass));
+    $method = 'open-ils.auth.authenticate.complete';
+    $login_params = array('password' => $md5_password, 'type' => 'opac', 'org' => NULL,
+        $identity => $name);
+    $result = xmlrpc($url, $method, $login_params);
+    // Call general error handler if can't connect
+    if ($error = xmlrpc_error()) {
+        ilsauthen_remote_connection_error('evergreen', $evergreen_server, $error->code, $error->message);
+        return FALSE;
+    }
+    if ($result['textcode'] == 'SUCCESS') {
+        $ret_value = TRUE;
+    }
+    return $ret_value;
+}
+
