@@ -11,6 +11,7 @@
 function ilsauthen_driver_meta() {
   return array(
     'driver_name' => 'evergreen',
+    'ils_id' => TRUE,
   );
 }
 
